@@ -1,17 +1,21 @@
 package edu.upenn.cis455.mapreduce.master;
 
 import java.io.*;
-import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 
-import javax.servlet.*;
 import javax.servlet.http.*;
 
 public class MasterServlet extends HttpServlet {
 
-	static final long serialVersionUID = 455555001;
-
+  static final long serialVersionUID = 455555001;
+  private HashSet<WorkerStatus> activeWorkers = new HashSet<WorkerStatus>();
+  private HashMap<String, JobStatus> activeJobs = new HashMap<String, JobStatus>();
+  private HashMap<String, JobStatus> completedJobs = new HashMap<String, JobStatus>();
+  
   public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
 	  
+	  // Determine which course of action to take based on what request was made
 	  String reqType = request.getServletPath();
 	  if (reqType.equals("/status")) {
 		  getStatus(request, response);
@@ -22,9 +26,6 @@ public class MasterServlet extends HttpServlet {
 	}
   
   private void getStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
-	  
-	  // TODO: Get WorkerStatus objects to report
-	  ArrayList<WorkerStatus> statuses = new ArrayList<WorkerStatus>();
 	  
 	  response.setContentType("text/html");
 	  PrintWriter out = response.getWriter();
@@ -38,7 +39,7 @@ public class MasterServlet extends HttpServlet {
 	  out.println("<th>Keys Read</th>");
 	  out.println("<th>Keys Written</th>");
 	  out.println("</tr>");
-	  for (WorkerStatus w : statuses) {
+	  for (WorkerStatus w : this.activeWorkers) {
 		  out.println("<tr>");
 		  out.println("<td>" + w.getName() + "</td>");
 		  out.println("<td>" + w.getStatus() + "</td>");
@@ -66,13 +67,14 @@ public class MasterServlet extends HttpServlet {
 	  try {
 		  // Process parameters
 		  String ip = request.getRemoteAddr();
-		  int port = Integer.parseInt(request.getParameter("port"));
+		  String port = request.getParameter("port");
 		  String status = request.getParameter("status");
 		  String job = request.getParameter("job");
 		  int keysRead = Integer.parseInt(request.getParameter("keysRead"));
 		  int keysWritten = Integer.parseInt(request.getParameter("keysWritten"));
 		  
 		  // Confirm that all parameters are pass basic validity checks
+		  Integer.parseInt(port); // port is valid int
 		  if (ip.isEmpty() || status.isEmpty() || job.isEmpty() || // empty params
 			  !(status.equals("mapping") || // invalid status param ...
 				status.equals("waiting") ||
@@ -81,12 +83,27 @@ public class MasterServlet extends HttpServlet {
 			  throw new IllegalArgumentException();
 		  }
 		  
-		  // Create status 
-		  WorkerStatus wrkrStatus = new WorkerStatus(ip, port, job, status, keysRead, keysWritten);
+		  // Create status and record active worker
+		  WorkerStatus workerStatus = new WorkerStatus(ip, port, job, status, keysRead, keysWritten);
+		  this.activeWorkers.add(workerStatus);
 		  
-		  // TODO: Save status somewhere somehow idk
+		  // Report status to relevant job
+		  JobStatus jobStatus = this.activeJobs.get(job);
+		  if (jobStatus != null) {
+			  jobStatus.updateWorkerStatus(workerStatus);
+		  } else {
+			  // TODO: error case
+		  }
 		  
-		  // TODO: Check statuses to determine if the reduce stage should be initiated
+		  // Check job status to determine next action
+		  if (jobStatus.checkMapComplete()) {
+			  if (!jobStatus.checkReduceComplete()) {
+				  // TODO: reduce init
+			  } else {
+				  // The job is complete 
+				  this.completedJobs.put(job, this.activeJobs.remove(job));
+			  }
+		  }
 		  
 	  } catch (IllegalArgumentException e) {
 		  response.sendError(HttpServletResponse.SC_BAD_REQUEST);
@@ -96,20 +113,38 @@ public class MasterServlet extends HttpServlet {
   public void doPost(HttpServletRequest request, HttpServletResponse response) throws IOException {
 	  try {
 		  // Process params
-		  String className = request.getParameter("class");
+		  String jobName = request.getParameter("class");
 		  String inputDir = request.getParameter("in");
 		  String outputDir = request.getParameter("out");
 		  int mapThreads = Integer.parseInt(request.getParameter("map"));
 		  int reduceThreads = Integer.parseInt(request.getParameter("reduce"));
 		  
 		  // Confirm that all parameters are pass basic validity checks
-		  if (className.isEmpty() || inputDir.isEmpty() || outputDir.isEmpty()) {
+		  if (jobName.isEmpty() || inputDir.isEmpty() || outputDir.isEmpty()) {
 			  throw new IllegalArgumentException();
 		  }
 		  
-		  // TODO: create and store job 
+		  // Determine how many active workers are available for the job
+		  HashSet<WorkerStatus> workers = new HashSet<WorkerStatus>();
+		  for (WorkerStatus w : this.activeWorkers) {
+			  // Check if worker is "active" (i.e. has reported within the past 30 seconds)
+			  long now = System.currentTimeMillis();
+			  long then = w.getLastActive().getTime();
+			  if (now - then > 30000)  { 
+				  WorkerStatus initialStatus = new WorkerStatus(w.getName(), jobName, "idle", 0, 0);
+				  workers.add(initialStatus);
+			  } else {
+				  // If worker has expired, remove from active list
+				  this.activeWorkers.remove(w);
+			  }
+		  }
 		  
-		  // TODO: figure out worker distribution & notify workers
+		  // Create and store job on master
+		  JobStatus job = new JobStatus(jobName, inputDir, outputDir, mapThreads, reduceThreads, workers);
+		  this.activeJobs.put(jobName, job);
+		  
+		  // TODO: Notify active workers of the job
+		  
 		  
 		  // Report success/failure
 		  response.setContentType("text/html");
@@ -117,9 +152,9 @@ public class MasterServlet extends HttpServlet {
 		  out.println("<html><head><title>Master</title></head><body>");
 		  out.println("</body></html>");
 		  
-	  } catch (IllegalArgumentException e) {
+	  } catch (IllegalArgumentException|ClassNotFoundException e) {
 		  response.sendError(HttpServletResponse.SC_BAD_REQUEST);
-	  }
+	  } 
   }
   
 }
