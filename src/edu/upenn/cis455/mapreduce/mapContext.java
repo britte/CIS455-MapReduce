@@ -20,7 +20,7 @@ public class mapContext implements Context {
 		
 		// Create output file and writer for each worker in spool-out 
 		for (String workerName : workers) {
-			File outFile = new File(StringTools.safeDirName(outDir.getAbsolutePath(), workerName + "-out"));
+			File outFile = new File(DirectoryTools.safeDirName(outDir.getAbsolutePath(), workerName + "-out"));
 			outFile.createNewFile();
 			PrintWriter writer = new PrintWriter(new FileWriter(outFile));
 			workerFiles.put(workerName, writer);

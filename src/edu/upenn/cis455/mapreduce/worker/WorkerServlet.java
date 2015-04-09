@@ -1,9 +1,6 @@
 package edu.upenn.cis455.mapreduce.worker;
 
 import java.io.*;
-import java.math.BigInteger;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.Map;
@@ -17,8 +14,9 @@ import javax.xml.bind.DatatypeConverter;
 import edu.upenn.cis455.httpclient.HttpClient;
 import edu.upenn.cis455.httpclient.HttpRequest;
 import edu.upenn.cis455.mapreduce.Context;
+import edu.upenn.cis455.mapreduce.InputReader;
 import edu.upenn.cis455.mapreduce.Job;
-import edu.upenn.cis455.mapreduce.StringTools;
+import edu.upenn.cis455.mapreduce.DirectoryTools;
 import edu.upenn.cis455.mapreduce.mapContext;
 
 public class WorkerServlet extends HttpServlet {
@@ -28,6 +26,8 @@ public class WorkerServlet extends HttpServlet {
   private String master;
   private String storageName;
   private File storageDir;
+  private File spoolOut;
+  private File spoolIn;
   private Timer t;
   
   private String ip = "localhost"; // TODO: not this
@@ -54,10 +54,13 @@ public class WorkerServlet extends HttpServlet {
   }
 
   public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
-	  File outDir = cleanMkdir("output");
-	  this.workers.add("w1");
-	  Context c = new mapContext(outDir, this.workers);
-	  c.write("test", "key");
+//	  File outDir = cleanMkdir("output");
+//	  this.workers.add("w1");
+//	  this.workers.add("w2");
+//	  Context c = new mapContext(outDir, this.workers);
+//	  c.write("test", "key");
+	  
+	  
 	  
 	  response.setContentType("text/html");
 	  PrintWriter out = response.getWriter();
@@ -72,6 +75,8 @@ public class WorkerServlet extends HttpServlet {
 		  runMap(request, response);
 	  } else if (reqType.equals("/runreduce")) {
 		  runReduce(request, response);
+	  } else if (reqType.equals("/pushdata")) {
+		  pushData(request, response);
 	  } else if (reqType.equals("/test")) {
 		  
 	  }
@@ -93,41 +98,19 @@ public class WorkerServlet extends HttpServlet {
 	  
   }
   
-  // Safely create a subdirectory within storage directory 
-  // If the directory exists, clear contents; otherwise create
-  private File cleanMkdir(String dir) {
-	  System.out.println(this.storageDir.getAbsolutePath());
-	  System.out.println(this.storageDir.exists());
-	  File[] storageContains = this.storageDir.listFiles();
-	  for (File f : storageContains) {
-		  // Sub directory already exists
-		  if (f.isDirectory() && f.getName().equals(dir)) {
-			  // Delete all contents
-			  File[] subDirContains = f.listFiles();
-			  for (File sf : subDirContains) {
-				  sf.delete();
-			  }
-			  return f;
-		  }
-	  }
-	  // Sub directory did not exist
-	  File subDir = new File(StringTools.safeDirName(this.storageDir.getAbsolutePath(), dir));
-	  subDir.mkdirs();
-	  return subDir;
-  }
-  
   private void runMap(HttpServletRequest request, HttpServletResponse response) throws IOException {
 	  try {
 		  // Process parameters
 		  String jobName = request.getParameter("job");
-		  String inputDir = request.getParameter("input"); 
+		  String inputName = request.getParameter("input"); 
+		  File inputDir = new File(DirectoryTools.safeDirName(this.storageName, inputName));
 		  int numThreads = Integer.parseInt(request.getParameter("numThreads"));
 		  int numWorkers = Integer.parseInt(request.getParameter("numWorkers"));
 		  
 		  Map<String, String[]> params = request.getParameterMap();
-		  Iterator<Map.Entry<String, String[]>> i = params.entrySet().iterator();
-		  while (i.hasNext()) {
-			  Map.Entry<String, String[]> p = i.next();
+		  Iterator<Map.Entry<String, String[]>> iter = params.entrySet().iterator();
+		  while (iter.hasNext()) {
+			  Map.Entry<String, String[]> p = iter.next();
 			  if (p.getKey().startsWith("worker")) {
 				  this.workers.add(p.getValue()[0]);
 			  }
@@ -135,30 +118,59 @@ public class WorkerServlet extends HttpServlet {
 		  
 		  // Check parameter validity
 		  if (jobName == null || 
-			  inputDir == null || !(new File(StringTools.safeDirName(this.storageName, inputDir)).exists()) ||
+			  inputName == null || !(inputDir.exists()) ||
 			  numThreads < 1 || 
 			  numWorkers < 1 || 
 			  workers.isEmpty()) {
 			  throw new IllegalArgumentException();
-		  } 
+		  } else {
+			  this.jobClass = jobName;
+		  }
 		  
 		  
 		  // Initialize class
 		  Class<?> c = Class.forName(jobClass);
 		  Job job = (Job) c.newInstance();
+		  
+		  // Get input reader to manage synchronous reading of all files
+		  InputReader reader = new InputReader(inputDir);
 		  		  
 		  // Create (or clean) spool-out and spool-in directories
-		  File outDir = cleanMkdir("spool-out");
-		  File indir = cleanMkdir("spool-in");
+		  spoolOut = DirectoryTools.cleanMkdir(this.storageDir, "spool-out");
+		  spoolIn = DirectoryTools.cleanMkdir(this.storageDir, "spool-in");
+
+		  Context outCtxt = new mapContext(spoolOut, this.workers);
 		  
-		  Context outCtxt = new mapContext(outDir, this.workers);
-//		  Context in = new myContext();
+		  // Instantiate and start threads
+		  ArrayList<Thread> threads = new ArrayList<Thread>();
+		  for (int i = 0; i < numThreads; i++) {
+			  threads.add(new Thread(new MapRun(job, reader, outCtxt, i)));
+		  }
 		  
-		  // TODO: instantiate threads
+		  for (Thread t : threads) {
+			  t.start();
+		  }
 		  
-		  // TODO: run threads
+		  // Wait until all files are read
+		  for (Thread t : threads) {
+			  t.join();
+		  }
+		  
+		  System.out.println("Input files read");
+		  
+		  // Distribute spool-out files
+		  for (File f : spoolOut.listFiles()) {
+			  // Get worker name
+			  String worker = f.getName().split("-")[0];
+			  HttpRequest req = new HttpRequest("http://" + worker + "/HW3/pushdata", "POST");
+			  req.setBody(f);
+			  HttpClient client = new HttpClient();
+			  client.sendPost(req);
+		  }
+		  
 	  } catch (Exception e) {
-		  
+		  e.printStackTrace();
+		  response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
 	  }
 	  
   }
@@ -176,38 +188,46 @@ public class WorkerServlet extends HttpServlet {
 		  throw new IllegalArgumentException();
 	  }
   }
-    
+   
+  private void pushData(HttpServletRequest request, HttpServletResponse response) throws IOException {
+	  System.out.println("push recieved");
+  }
+  
   private class MapRun implements Runnable {
 	  
 	  Job j;
-	  Context in;
+	  InputReader in;
 	  Context out;
+	  int id;
 	  
-	  private MapRun(Job j, Context in, Context out){ 
+	  private MapRun(Job j, InputReader in, Context out, int id) throws FileNotFoundException{ 
 		  this.j = j; 
 		  this.in = in;
 		  this.out = out;
+		  this.id = id;
 	  }
 
 	  @Override
 	  public void run() {
-		  // TODO: Read line from file
-		  String line = "";
-		  if (line == null) return;
-		  
-		  // Parse line of the form <key> <tab> <value>
-		  String[] keyVal = line.split("\\t");
-		  if (keyVal.length < 2) return;
-		  String key = keyVal[0];
-		  String val = keyVal[1];
-		  
-		  
-		  // Map
-		  this.j.map(key, val, out);
-		  
-		  
+		  // Read input files and map into spool-out
+		  String line = in.readLine();
+		  while (line != null) {
+			  
+			  // Parse line of the form <key> <tab> <value>
+			  String[] keyVal = line.split("\\t");
+			  if (keyVal.length < 2) return;
+			  String key = keyVal[0];
+			  String val = keyVal[1];
+			  
+			  // Map line
+			  this.j.map(key, val, out);
+			  System.out.println("Thread " + this.id + " mapping");
+			  
+			  // Get line
+			  line = in.readLine();
+		  }
+		  System.out.println("Thread " + this.id + " terminating");
 	  }
-	  
   }
 }
   

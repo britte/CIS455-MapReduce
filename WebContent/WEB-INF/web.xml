@@ -46,5 +46,20 @@
      <servlet-name>worker</servlet-name>
      <url-pattern>/test</url-pattern>
    </servlet-mapping>  
+   
+   <servlet-mapping>
+     <servlet-name>worker</servlet-name>
+     <url-pattern>/runmap</url-pattern>
+   </servlet-mapping>  
+   
+   <servlet-mapping>
+     <servlet-name>worker</servlet-name>
+     <url-pattern>/runreduce</url-pattern>
+   </servlet-mapping>  
+   
+   <servlet-mapping>
+     <servlet-name>worker</servlet-name>
+     <url-pattern>/pushdata</url-pattern>
+   </servlet-mapping>  
  
 </web-app>

@@ -1,5 +1,6 @@
 package edu.upenn.cis455.httpclient;
 
+import java.io.File;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.util.HashMap;
@@ -12,6 +13,7 @@ public class HttpRequest {
 	private String baseUrl;
 	private String method; 
 	private HashMap<String, HashSet<String>> params = new HashMap<String, HashSet<String>>();
+	private File bodyFile;
 	
 	public HttpRequest(String baseUrl, String method){
 		this.baseUrl = baseUrl;
@@ -27,11 +29,16 @@ public class HttpRequest {
 		this.params.put(name, vals);
 	}
 	
+	public void setBody(File f) {
+		this.bodyFile = f;
+	}
+	
 	public String getBaseUrl() { return this.baseUrl; }
 	public String getMethod() { return this.method; }
 	public String getEncodedParams() throws UnsupportedEncodingException { 
+		if (this.params.size() == 0) return "";
 		StringBuilder pString = new StringBuilder();
-		Iterator<Entry<String, HashSet<String>>> i = params.entrySet().iterator();
+		Iterator<Entry<String, HashSet<String>>> i = this.params.entrySet().iterator();
 		while (i.hasNext()) {
 			Entry<String, HashSet<String>> param = i.next();
 			for (String value : param.getValue()) {
@@ -41,5 +48,8 @@ public class HttpRequest {
 			}
 		}
 		return pString.substring(0, pString.length() - 1);
+	}
+	public File getBodyFile() {
+		return this.bodyFile;
 	}
 }

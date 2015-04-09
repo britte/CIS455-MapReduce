@@ -1,6 +1,8 @@
 package edu.upenn.cis455.httpclient;
 
 import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.HttpURLConnection;
@@ -68,6 +70,15 @@ public class HttpClient {
 			// Send params as a body
 			PrintWriter out = new PrintWriter(new BufferedOutputStream(conn.getOutputStream()));	
 		    out.write(req.getEncodedParams());
+		    
+		    // Send body file (if one exists)
+		    if (req.getBodyFile().exists()) {
+		    	BufferedReader reader = new BufferedReader(new FileReader(req.getBodyFile()));
+		    	String line = reader.readLine();
+		    	while (line != null) {
+		    		out.println(line);
+		    	}
+		    }
 		    out.flush();
 		    
 			int status = conn.getResponseCode();
