@@ -2,6 +2,7 @@ package edu.upenn.cis455.mapreduce.worker;
 
 import java.io.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Timer;
@@ -17,6 +18,7 @@ import edu.upenn.cis455.mapreduce.Context;
 import edu.upenn.cis455.mapreduce.InputReader;
 import edu.upenn.cis455.mapreduce.Job;
 import edu.upenn.cis455.mapreduce.DirectoryTools;
+import edu.upenn.cis455.mapreduce.ReduceContext;
 import edu.upenn.cis455.mapreduce.mapContext;
 
 public class WorkerServlet extends HttpServlet {
@@ -26,8 +28,7 @@ public class WorkerServlet extends HttpServlet {
   private String master;
   private String storageName;
   private File storageDir;
-  private File spoolOut;
-  private File spoolIn;
+  private int pushfile = 0;
   private Timer t;
   
   private String ip = "localhost"; // TODO: not this
@@ -123,22 +124,18 @@ public class WorkerServlet extends HttpServlet {
 			  numWorkers < 1 || 
 			  workers.isEmpty()) {
 			  throw new IllegalArgumentException();
-		  } else {
-			  this.jobClass = jobName;
 		  }
 		  
+		  // Create (or clean) spool-out and spool-in directories
+		  File spoolOut = DirectoryTools.cleanMkdir(this.storageDir, "spool-out");
+		  File spoolIn = DirectoryTools.cleanMkdir(this.storageDir, "spool-in");
 		  
-		  // Initialize class
-		  Class<?> c = Class.forName(jobClass);
+		  // Initialize class, input file reader, and output context for threads
+		  Class<?> c = Class.forName(jobName);
 		  Job job = (Job) c.newInstance();
 		  
-		  // Get input reader to manage synchronous reading of all files
-		  InputReader reader = new InputReader(inputDir);
-		  		  
-		  // Create (or clean) spool-out and spool-in directories
-		  spoolOut = DirectoryTools.cleanMkdir(this.storageDir, "spool-out");
-		  spoolIn = DirectoryTools.cleanMkdir(this.storageDir, "spool-in");
-
+		  InputReader reader = new InputReader(inputDir, false);
+		  
 		  Context outCtxt = new mapContext(spoolOut, this.workers);
 		  
 		  // Instantiate and start threads
@@ -156,17 +153,24 @@ public class WorkerServlet extends HttpServlet {
 			  t.join();
 		  }
 		  
-		  System.out.println("Input files read");
+		  System.out.println("Input files mapped");
 		  
 		  // Distribute spool-out files
+		  HttpClient client = new HttpClient();
 		  for (File f : spoolOut.listFiles()) {
 			  // Get worker name
 			  String worker = f.getName().split("-")[0];
 			  HttpRequest req = new HttpRequest("http://" + worker + "/HW3/pushdata", "POST");
 			  req.setBody(f);
-			  HttpClient client = new HttpClient();
 			  client.sendPost(req);
 		  }
+		  
+		  // Send /workerstatus update
+		  this.status = "waiting";
+		  new NotifyMaster().run();
+		  
+		  // Send successful response
+		  response.setStatus(HttpServletResponse.SC_OK);
 		  
 	  } catch (Exception e) {
 		  e.printStackTrace();
@@ -176,21 +180,75 @@ public class WorkerServlet extends HttpServlet {
   }
   
   private void runReduce(HttpServletRequest request, HttpServletResponse response) throws IOException {
-	  // Process parameters
-	  String jobName = request.getParameter("job");
-	  String outputDir = request.getParameter("output");
-	  int numThreads = Integer.parseInt(request.getParameter("numThreads"));
-	  
-	  // Check parameter validity
-	  if (jobName == null || 
-		  outputDir == null || !(new File(outputDir).exists()) ||
-		  numThreads < 1 ) {
-		  throw new IllegalArgumentException();
+	  try {
+		  // Process parameters
+		  String jobName = request.getParameter("job");
+		  String outputName = request.getParameter("output"); 
+		  File outputDir = DirectoryTools.cleanMkdir(this.storageDir, outputName);
+		  int numThreads = Integer.parseInt(request.getParameter("numThreads"));
+		  
+		  // Check parameter validity
+		  if (jobName == null || 
+			  outputName == null || !outputDir.exists() ||
+			  numThreads < 1 ) {
+			  throw new IllegalArgumentException();
+		  }
+		  
+		  // Initialize job class, spool-in file reader, and output context for threads
+		  Class<?> c = Class.forName(jobName);
+		  Job job = (Job) c.newInstance();
+		  
+		  File spoolInDir = new File(DirectoryTools.safeDirName(this.storageName, "spool-in"));
+		  InputReader reader = new InputReader(spoolInDir, true); 
+		  
+		  Context outCtxt = new ReduceContext(outputDir);
+		  
+		  // Instantiate and start threads
+		  ArrayList<Thread> threads = new ArrayList<Thread>();
+		  for (int i = 0; i < numThreads; i++) {
+			  threads.add(new Thread(new ReduceRun(job, reader, outCtxt, i)));
+		  }
+		  
+		  for (Thread t : threads) {
+			  t.start();
+		  }
+		  
+		  // Wait until all files are read
+		  for (Thread t : threads) {
+			  t.join();
+		  }
+		  
+		  System.out.println("Map files reduced");
+		  
+		  // Send /workerstatus update
+		  this.status = "idle";
+		  new NotifyMaster().run();
+		  
+		  // Send successful response
+		  response.setStatus(HttpServletResponse.SC_OK);
+		  
+	  } catch (Exception e) {
+		  e.printStackTrace();
+		  response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
 	  }
+	  
   }
    
   private void pushData(HttpServletRequest request, HttpServletResponse response) throws IOException {
-	  System.out.println("push recieved");
+	  BufferedReader reader = request.getReader();
+	  String spoolInDir = DirectoryTools.safeDirName(this.storageName, "spool-in");
+	  File spoolInFile = new File(DirectoryTools.safeDirName(spoolInDir, "map" + this.pushfile));
+	  pushfile ++;
+	  PrintWriter writer = new PrintWriter(new FileWriter(spoolInFile));
+	  
+	  String line = reader.readLine();
+	  while (line != null) {
+		  writer.println(line);
+		  writer.flush();
+		  line = reader.readLine();
+	  };
+	  reader.close();
+	  writer.close();
   }
   
   private class MapRun implements Runnable {
@@ -214,19 +272,67 @@ public class WorkerServlet extends HttpServlet {
 		  while (line != null) {
 			  
 			  // Parse line of the form <key> <tab> <value>
-			  String[] keyVal = line.split("\\t");
+			  String[] keyVal = line.split("\\t", 2);
 			  if (keyVal.length < 2) return;
 			  String key = keyVal[0];
 			  String val = keyVal[1];
 			  
 			  // Map line
-			  this.j.map(key, val, out);
+			  this.j.map(Integer.toString(this.id), val, out);
 			  System.out.println("Thread " + this.id + " mapping");
 			  
-			  // Get line
+			  // Get next line
 			  line = in.readLine();
 		  }
-		  System.out.println("Thread " + this.id + " terminating");
+		  System.out.println("Map thread " + this.id + " terminating");
+	  }
+  }
+  
+  private class ReduceRun implements Runnable {
+	  
+	  Job j;
+	  InputReader in;
+	  Context out;
+	  int id;
+	  
+	  private ReduceRun(Job j, InputReader in, Context out, int id) throws FileNotFoundException{ 
+		  this.j = j; 
+		  this.in = in;
+		  this.out = out;
+		  this.id = id;
+	  }
+
+	  @Override
+	  public void run() {
+		  String line = in.readLine();
+		  while (line != null) {
+			  // Read all lines with the same key from spool-in
+			  ArrayList<String> vals = new ArrayList<String>();
+			  String lastKey = "";
+			  while (line != null) {
+				  // Parse line of the form <key> <tab> <value>
+				  String[] keyVal = line.split("\\t", 2);
+				  if (keyVal.length < 2) {
+					  line = in.readLine();
+					  continue;
+				  }
+				  String key = keyVal[0];
+				  String val = keyVal[1];
+				  
+				  if (!lastKey.equals(key)) { // new key found
+					  // Reduce values
+					  this.j.reduce(key, vals.toArray(new String[vals.size()]), out);
+					  System.out.println("Thread " + this.id + " reducing for key " + key);
+					  lastKey = key;
+					  vals.clear();
+				  } else {
+					  line = in.readLine();
+				  }
+				  // No need to get a new line, because the last line read 
+				  // was for a new key already
+			  }
+		  }
+		  System.out.println("Reduce thread " + this.id + " terminating");
 	  }
   }
 }

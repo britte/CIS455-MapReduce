@@ -69,5 +69,9 @@ public class mapContext implements Context {
 		  
 		return this.workers.get(i);
 	}
+	
+	public void close() {
+		// TODO
+	}
 
 }

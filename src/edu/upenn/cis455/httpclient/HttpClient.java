@@ -68,7 +68,7 @@ public class HttpClient {
 			conn.setDoOutput(true); // sets POST
 			
 			// Send params as a body
-			PrintWriter out = new PrintWriter(new BufferedOutputStream(conn.getOutputStream()));	
+			PrintWriter out = new PrintWriter(new BufferedOutputStream(conn.getOutputStream()), true);	
 		    out.write(req.getEncodedParams());
 		    
 		    // Send body file (if one exists)
@@ -77,6 +77,7 @@ public class HttpClient {
 		    	String line = reader.readLine();
 		    	while (line != null) {
 		    		out.println(line);
+		    		line = reader.readLine();
 		    	}
 		    }
 		    out.flush();
