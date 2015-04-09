@@ -68,6 +68,7 @@ public class HttpClient {
 			// Send params as a body
 			PrintWriter out = new PrintWriter(new BufferedOutputStream(conn.getOutputStream()));	
 		    out.write(req.getEncodedParams());
+		    out.flush();
 		    
 			int status = conn.getResponseCode();
 			conn.disconnect();

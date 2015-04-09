@@ -12,6 +12,19 @@
      <servlet-class>edu.upenn.cis455.mapreduce.master.MasterServlet</servlet-class> 
    </servlet>
    
+   <servlet>
+     <servlet-name>worker</servlet-name>
+     <servlet-class>edu.upenn.cis455.mapreduce.worker.WorkerServlet</servlet-class> 
+     <init-param>
+     	<param-name>master</param-name>
+     	<param-value>localhost:8080</param-value>
+     </init-param>
+     <init-param>
+     	<param-name>storagedir</param-name>
+     	<param-value>/home/cis455/Desktop/maptest</param-value>
+     </init-param>
+   </servlet>
+   
    <!-- Mappings -->
    
    <servlet-mapping>
@@ -27,6 +40,11 @@
    <servlet-mapping>
      <servlet-name>master</servlet-name>
      <url-pattern>/job</url-pattern>
+   </servlet-mapping>  
+   
+   <servlet-mapping>
+     <servlet-name>worker</servlet-name>
+     <url-pattern>/test</url-pattern>
    </servlet-mapping>  
  
 </web-app>

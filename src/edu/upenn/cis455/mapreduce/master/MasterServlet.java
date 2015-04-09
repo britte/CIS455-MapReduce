@@ -6,6 +6,9 @@ import java.util.HashSet;
 
 import javax.servlet.http.*;
 
+import edu.upenn.cis455.httpclient.HttpClient;
+import edu.upenn.cis455.httpclient.HttpRequest;
+
 public class MasterServlet extends HttpServlet {
 
   static final long serialVersionUID = 455555001;
@@ -26,6 +29,8 @@ public class MasterServlet extends HttpServlet {
 	}
   
   private void getStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
+	  
+	  cleanActiveWorkers();
 	  
 	  response.setContentType("text/html");
 	  PrintWriter out = response.getWriter();
@@ -63,7 +68,6 @@ public class MasterServlet extends HttpServlet {
   }
   
   private void getWorkerStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
-	  
 	  try {
 		  // Process parameters
 		  String ip = request.getRemoteAddr();
@@ -75,7 +79,7 @@ public class MasterServlet extends HttpServlet {
 		  
 		  // Confirm that all parameters are pass basic validity checks
 		  Integer.parseInt(port); // port is valid int
-		  if (ip.isEmpty() || status.isEmpty() || job.isEmpty() || // empty params
+		  if (ip.isEmpty() || status.isEmpty() || // empty params
 			  !(status.equals("mapping") || // invalid status param ...
 				status.equals("waiting") ||
 				status.equals("reducing") || 
@@ -87,24 +91,30 @@ public class MasterServlet extends HttpServlet {
 		  WorkerStatus workerStatus = new WorkerStatus(ip, port, job, status, keysRead, keysWritten);
 		  this.activeWorkers.add(workerStatus);
 		  
-		  // Report status to relevant job
-		  JobStatus jobStatus = this.activeJobs.get(job);
-		  if (jobStatus != null) {
-			  jobStatus.updateWorkerStatus(workerStatus);
-		  } else {
-			  // TODO: error case
-		  }
-		  
-		  // Check job status to determine next action
-		  if (jobStatus.checkMapComplete()) {
-			  if (!jobStatus.checkReduceComplete()) {
-				  // TODO: reduce init
-			  } else {
-				  // The job is complete 
-				  this.completedJobs.put(job, this.activeJobs.remove(job));
+		  // Report status to relevant job (if the worker is currently running a job)
+		  if (!job.isEmpty()) {
+			  JobStatus jobStatus = this.activeJobs.get(job);
+			  if (jobStatus != null) {
+				  jobStatus.updateWorkerStatus(workerStatus);
+				  
+				  // Check job status to determine next action
+				  if (jobStatus.checkMapComplete()) {
+					  if (!jobStatus.checkReduceComplete()) {
+						  for (WorkerStatus jw : jobStatus.getWorkers()) {
+							  HttpRequest req = new HttpRequest("http://" + jw.getName() + "/HW3/runreduce", "POST");
+							  req.setParam("job", jw.getJob());
+							  req.setParam("output", jobStatus.getOutputDir());
+							  req.setParam("numThreads", Integer.toString(jobStatus.getReduceThreads()));
+							  HttpClient client = new HttpClient();
+							  client.sendPost(req);
+						  }
+					  } else {
+						  // The job is complete 
+						  this.completedJobs.put(job, this.activeJobs.remove(job));
+					  }
+				  }
 			  }
 		  }
-		  
 	  } catch (IllegalArgumentException e) {
 		  response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 	  } 
@@ -125,26 +135,32 @@ public class MasterServlet extends HttpServlet {
 		  }
 		  
 		  // Determine how many active workers are available for the job
+		  cleanActiveWorkers();
 		  HashSet<WorkerStatus> workers = new HashSet<WorkerStatus>();
 		  for (WorkerStatus w : this.activeWorkers) {
-			  // Check if worker is "active" (i.e. has reported within the past 30 seconds)
-			  long now = System.currentTimeMillis();
-			  long then = w.getLastActive().getTime();
-			  if (now - then > 30000)  { 
-				  WorkerStatus initialStatus = new WorkerStatus(w.getName(), jobName, "idle", 0, 0);
-				  workers.add(initialStatus);
-			  } else {
-				  // If worker has expired, remove from active list
-				  this.activeWorkers.remove(w);
-			  }
+			  WorkerStatus initialStatus = new WorkerStatus(w.getName(), jobName, "idle", 0, 0);
+			  workers.add(initialStatus);
 		  }
 		  
 		  // Create and store job on master
-		  JobStatus job = new JobStatus(jobName, inputDir, outputDir, mapThreads, reduceThreads, workers);
-		  this.activeJobs.put(jobName, job);
+		  JobStatus jobStatus = new JobStatus(jobName, inputDir, outputDir, mapThreads, reduceThreads, workers);
+		  this.activeJobs.put(jobName, jobStatus);
 		  
-		  // TODO: Notify active workers of the job
-		  
+		  // Notify active workers of the job
+		  for (WorkerStatus w : this.activeWorkers) {
+			  HttpRequest req = new HttpRequest("http://" + w.getName() + "/HW3/runmap", "POST");
+			  req.setParam("job", jobName);
+			  req.setParam("input", inputDir);
+			  req.setParam("numThreads", Integer.toString(mapThreads));
+			  req.setParam("keysWritten", Integer.toString(this.activeWorkers.size()));
+			  int i = 0;
+			  for (WorkerStatus w2 : this.activeWorkers) {
+				  req.setParam("worker" + i, w2.getName());
+				  i++;
+			  }
+			  HttpClient client = new HttpClient();
+			  client.sendPost(req);
+		  }
 		  
 		  // Report success/failure
 		  response.setContentType("text/html");
@@ -155,6 +171,18 @@ public class MasterServlet extends HttpServlet {
 	  } catch (IllegalArgumentException|ClassNotFoundException e) {
 		  response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 	  } 
+  }
+  
+  // Confirm that all known workers are "active" (i.e. have reported within the past 30 seconds)
+  private void cleanActiveWorkers() {
+	  for (WorkerStatus w : this.activeWorkers) {
+		  long now = System.currentTimeMillis();
+		  long then = w.getLastActive().getTime();
+		  if (now - then < 30000)  { 
+			  // If worker has expired, remove from active list
+			  this.activeWorkers.remove(w);
+		  }
+	  }
   }
   
 }

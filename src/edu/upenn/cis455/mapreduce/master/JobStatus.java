@@ -27,9 +27,15 @@ public class JobStatus {
 		Class<?> c = Class.forName(jobClass);
 	}
 	
+	public HashSet<WorkerStatus> getWorkers() { return this.workers; }
+	public String getInputDir() { return this.inDir; }
+	public String getOutputDir() { return this.outDir; }
+	public int getMapThreads() { return this.mapThreads; }
+	public int getReduceThreads() { return this.reduceThreads; }
+	
 	public void updateWorkerStatus(WorkerStatus status) {
 		if (status.getJob() != this.jobClass) return; // don't update status for another job
-		this.jobStarted = true;
+		if (!status.getStatus().equals("idle")) this.jobStarted = true;
 		workers.remove(status); // remove status if it exists
 		workers.add(status); // add new or updated status
 	}
