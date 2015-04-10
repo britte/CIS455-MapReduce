@@ -12,7 +12,8 @@ import java.util.HashMap;
 
 public class ReduceContext implements Context {
 	
-	PrintWriter writer;
+	private PrintWriter writer;
+	private int keysWritten = 0;
 	
 	public ReduceContext(File outDir) throws IOException {
 		
@@ -25,14 +26,17 @@ public class ReduceContext implements Context {
 	@Override
 	public void write(String key, String value) {
 		// Create line
-		if (key.isEmpty() || value.isEmpty()) return;
+		if (key == null || value == null || key.isEmpty() || value.isEmpty()) return;
 		String line = key + "\t" + value;
+		this.keysWritten++;
 		
 		synchronized(this.writer) {
 			this.writer.println(line);
 			this.writer.flush();
 		}
 	}
+	
+	public int getKeysWritten() { return this.keysWritten; }
 	
 	public void close() {
 		// TODO

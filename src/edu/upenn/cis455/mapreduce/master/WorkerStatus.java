@@ -35,9 +35,13 @@ public class WorkerStatus {
 	public Date getLastActive() { return this.lastActive; }
 	
     @Override
-    public int hashCode() {
-    	// Use the name as a id for hashing workerstatus
-        return getName().hashCode();
+    public boolean equals(Object o) {
+        if (o == this) return true;
+        if (!(o instanceof WorkerStatus)) return false;
+         
+        WorkerStatus w = (WorkerStatus) o;
+         
+        // Compare the data members and return accordingly 
+        return ( w.getName().equals(this.getName()));
     }
-	
 }

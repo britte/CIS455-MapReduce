@@ -3,7 +3,10 @@ package edu.upenn.cis455.mapreduce.master;
 import java.io.*;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Vector;
 
+import javax.servlet.ServletException;
 import javax.servlet.http.*;
 
 import edu.upenn.cis455.httpclient.HttpClient;
@@ -12,7 +15,7 @@ import edu.upenn.cis455.httpclient.HttpRequest;
 public class MasterServlet extends HttpServlet {
 
   static final long serialVersionUID = 455555001;
-  private HashSet<WorkerStatus> activeWorkers = new HashSet<WorkerStatus>();
+  private Vector<WorkerStatus> activeWorkers = new Vector<WorkerStatus>();
   private HashMap<String, JobStatus> activeJobs = new HashMap<String, JobStatus>();
   private HashMap<String, JobStatus> completedJobs = new HashMap<String, JobStatus>();
   
@@ -26,11 +29,11 @@ public class MasterServlet extends HttpServlet {
 		  getWorkerStatus(request, response);
 	  }
 		
-	}
+  }
   
   private void getStatus(HttpServletRequest request, HttpServletResponse response) throws IOException {
 	  
-	  cleanActiveWorkers();
+	  HashSet<WorkerStatus> clean = cleanActiveWorkers();
 	  
 	  response.setContentType("text/html");
 	  PrintWriter out = response.getWriter();
@@ -44,18 +47,20 @@ public class MasterServlet extends HttpServlet {
 	  out.println("<th>Keys Read</th>");
 	  out.println("<th>Keys Written</th>");
 	  out.println("</tr>");
-	  for (WorkerStatus w : this.activeWorkers) {
+	  Iterator<WorkerStatus> iter = clean.iterator();
+	  while (iter.hasNext()) {
+		  WorkerStatus w = iter.next();
 		  out.println("<tr>");
 		  out.println("<td>" + w.getName() + "</td>");
 		  out.println("<td>" + w.getStatus() + "</td>");
-		  out.println("<td>" + w.getJob() + "</td>");
+		  out.println("<td>" + ((w.getJob().isEmpty()) ? "NONE" : w.getJob()) + "</td>");
 		  out.println("<td>" + w.getKeysRead() + "</td>");
 		  out.println("<td>" + w.getKeysWritten() + "</td>");
 		  out.println("</tr>");
 	  }
 	  out.println("</table><br />");
 	  // Print out the job submission form
-	  out.println("<form action=\"/HW3/job\" method=\"post\">");
+	  out.println("<form action=\"" + request.getContextPath() + "/job\" method=\"post\">");
 	  out.println("Class Name: <input type=\"text\" name=\"class\"><br />");
 	  out.println("Input Directory: <input type=\"text\" name=\"in\"><br />");
 	  out.println("Output Directory: <input type=\"text\" name=\"out\"><br />");
@@ -89,6 +94,7 @@ public class MasterServlet extends HttpServlet {
 		  
 		  // Create status and record active worker
 		  WorkerStatus workerStatus = new WorkerStatus(ip, port, job, status, keysRead, keysWritten);
+		  this.activeWorkers.remove(workerStatus);
 		  this.activeWorkers.add(workerStatus);
 		  
 		  // Report status to relevant job (if the worker is currently running a job)
@@ -96,12 +102,12 @@ public class MasterServlet extends HttpServlet {
 			  JobStatus jobStatus = this.activeJobs.get(job);
 			  if (jobStatus != null) {
 				  jobStatus.updateWorkerStatus(workerStatus);
-				  
 				  // Check job status to determine next action
 				  if (jobStatus.checkMapComplete()) {
 					  if (!jobStatus.checkReduceComplete()) {
+						  System.out.println("Starting reduce for job: " + jobStatus.getJobClass());
 						  for (WorkerStatus jw : jobStatus.getWorkers()) {
-							  HttpRequest req = new HttpRequest("http://" + jw.getName() + "/HW3/runreduce", "POST");
+							  HttpRequest req = new HttpRequest("http://" + jw.getName() + request.getContextPath() + "/runreduce", "POST");
 							  req.setParam("job", jw.getJob());
 							  req.setParam("output", jobStatus.getOutputDir());
 							  req.setParam("numThreads", Integer.toString(jobStatus.getReduceThreads()));
@@ -111,6 +117,7 @@ public class MasterServlet extends HttpServlet {
 					  } else {
 						  // The job is complete 
 						  this.completedJobs.put(job, this.activeJobs.remove(job));
+						  System.out.println("Job complete: " + jobStatus.getJobClass());
 					  }
 				  }
 			  }
@@ -135,9 +142,11 @@ public class MasterServlet extends HttpServlet {
 		  }
 		  
 		  // Determine how many active workers are available for the job
-		  cleanActiveWorkers();
+		  HashSet<WorkerStatus> clean = cleanActiveWorkers();
 		  HashSet<WorkerStatus> workers = new HashSet<WorkerStatus>();
-		  for (WorkerStatus w : this.activeWorkers) {
+		  Iterator<WorkerStatus> iter = clean.iterator();
+		  while (iter.hasNext()) {
+			  WorkerStatus w = iter.next();
 			  WorkerStatus initialStatus = new WorkerStatus(w.getName(), jobName, "idle", 0, 0);
 			  workers.add(initialStatus);
 		  }
@@ -146,42 +155,50 @@ public class MasterServlet extends HttpServlet {
 		  JobStatus jobStatus = new JobStatus(jobName, inputDir, outputDir, mapThreads, reduceThreads, workers);
 		  this.activeJobs.put(jobName, jobStatus);
 		  
+		  System.out.println("Starting map for job: " + jobName);
+		  
 		  // Notify active workers of the job
-		  for (WorkerStatus w : this.activeWorkers) {
-			  HttpRequest req = new HttpRequest("http://" + w.getName() + "/HW3/runmap", "POST");
+		  Iterator<WorkerStatus> iter2 = clean.iterator();
+		  while (iter2.hasNext()) {
+			  WorkerStatus w = iter2.next();
+			  HttpRequest req = new HttpRequest("http://" + w.getName() + request.getContextPath() + "/runmap", "POST");
 			  req.setParam("job", jobName);
 			  req.setParam("input", inputDir);
 			  req.setParam("numThreads", Integer.toString(mapThreads));
-			  req.setParam("keysWritten", Integer.toString(this.activeWorkers.size()));
+			  req.setParam("numWorkers", Integer.toString(this.activeWorkers.size()));
 			  int i = 0;
-			  for (WorkerStatus w2 : this.activeWorkers) {
-				  req.setParam("worker" + i, w2.getName());
+			  for (WorkerStatus cw2 : clean) {
+				  req.setParam("worker" + i, cw2.getName());
 				  i++;
 			  }
 			  HttpClient client = new HttpClient();
 			  client.sendPost(req);
 		  }
 		  
-		  // Report success/failure
-		  response.setContentType("text/html");
-		  PrintWriter out = response.getWriter();
-		  out.println("<html><head><title>Master</title></head><body>");
-		  out.println("</body></html>");
-		  
-	  } catch (IllegalArgumentException|ClassNotFoundException e) {
+	  } catch (IllegalArgumentException | ClassNotFoundException e) {
 		  response.sendError(HttpServletResponse.SC_BAD_REQUEST);
 	  } 
   }
   
   // Confirm that all known workers are "active" (i.e. have reported within the past 30 seconds)
-  private void cleanActiveWorkers() {
-	  for (WorkerStatus w : this.activeWorkers) {
-		  long now = System.currentTimeMillis();
-		  long then = w.getLastActive().getTime();
-		  if (now - then < 30000)  { 
-			  // If worker has expired, remove from active list
-			  this.activeWorkers.remove(w);
+  private HashSet<WorkerStatus> cleanActiveWorkers() {
+	  HashSet<WorkerStatus> clean = new HashSet<WorkerStatus>();
+	  synchronized(this.activeWorkers) {
+		  Iterator<WorkerStatus> iter = this.activeWorkers.iterator();
+		  
+		  while (iter.hasNext()) {
+			  WorkerStatus w = iter.next();
+			  long now = System.currentTimeMillis();
+			  long then = w.getLastActive().getTime();
+			  if (now - then > 30000)  { 
+				  // If worker has expired, remove from active list
+				  iter.remove();
+			  } else {
+				  clean.add(w);
+			  }
 		  }
+		  
+		  return clean;
 	  }
   }
   

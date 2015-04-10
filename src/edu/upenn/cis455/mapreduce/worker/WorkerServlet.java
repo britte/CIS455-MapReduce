@@ -19,7 +19,7 @@ import edu.upenn.cis455.mapreduce.InputReader;
 import edu.upenn.cis455.mapreduce.Job;
 import edu.upenn.cis455.mapreduce.DirectoryTools;
 import edu.upenn.cis455.mapreduce.ReduceContext;
-import edu.upenn.cis455.mapreduce.mapContext;
+import edu.upenn.cis455.mapreduce.MapContext;
 
 public class WorkerServlet extends HttpServlet {
 
@@ -50,8 +50,8 @@ public class WorkerServlet extends HttpServlet {
 	  }
 	  
 	  // Begin timer for workerstatus posts updates
-//	  this.t = new Timer();
-//	  this.t.scheduleAtFixedRate(new NotifyMaster(), 0, 10000);
+	  this.t = new Timer();
+	  this.t.scheduleAtFixedRate(new NotifyMaster(), 0, 10000);
   }
 
   public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
@@ -126,6 +126,10 @@ public class WorkerServlet extends HttpServlet {
 			  throw new IllegalArgumentException();
 		  }
 		  
+		  this.status = "mapping";
+		  this.keysRead = 0;
+		  this.keysWritten = 0;
+		  
 		  // Create (or clean) spool-out and spool-in directories
 		  File spoolOut = DirectoryTools.cleanMkdir(this.storageDir, "spool-out");
 		  File spoolIn = DirectoryTools.cleanMkdir(this.storageDir, "spool-in");
@@ -133,10 +137,11 @@ public class WorkerServlet extends HttpServlet {
 		  // Initialize class, input file reader, and output context for threads
 		  Class<?> c = Class.forName(jobName);
 		  Job job = (Job) c.newInstance();
+		  this.jobClass = jobName;
 		  
 		  InputReader reader = new InputReader(inputDir, false);
 		  
-		  Context outCtxt = new mapContext(spoolOut, this.workers);
+		  MapContext outCtxt = new MapContext(spoolOut, this.workers);
 		  
 		  // Instantiate and start threads
 		  ArrayList<Thread> threads = new ArrayList<Thread>();
@@ -194,14 +199,20 @@ public class WorkerServlet extends HttpServlet {
 			  throw new IllegalArgumentException();
 		  }
 		  
+		  this.status = "reducing";
+		  this.keysRead = 0;
+		  this.keysWritten = 0;
+		  
+		  
 		  // Initialize job class, spool-in file reader, and output context for threads
 		  Class<?> c = Class.forName(jobName);
 		  Job job = (Job) c.newInstance();
+		  this.jobClass = jobName;
 		  
 		  File spoolInDir = new File(DirectoryTools.safeDirName(this.storageName, "spool-in"));
 		  InputReader reader = new InputReader(spoolInDir, true); 
 		  
-		  Context outCtxt = new ReduceContext(outputDir);
+		  ReduceContext outCtxt = new ReduceContext(outputDir);
 		  
 		  // Instantiate and start threads
 		  ArrayList<Thread> threads = new ArrayList<Thread>();
@@ -222,6 +233,7 @@ public class WorkerServlet extends HttpServlet {
 		  
 		  // Send /workerstatus update
 		  this.status = "idle";
+		  this.keysRead = 0;
 		  new NotifyMaster().run();
 		  
 		  // Send successful response
@@ -255,10 +267,10 @@ public class WorkerServlet extends HttpServlet {
 	  
 	  Job j;
 	  InputReader in;
-	  Context out;
+	  MapContext out;
 	  int id;
 	  
-	  private MapRun(Job j, InputReader in, Context out, int id) throws FileNotFoundException{ 
+	  private MapRun(Job j, InputReader in, MapContext out, int id) throws FileNotFoundException{ 
 		  this.j = j; 
 		  this.in = in;
 		  this.out = out;
@@ -269,16 +281,18 @@ public class WorkerServlet extends HttpServlet {
 	  public void run() {
 		  // Read input files and map into spool-out
 		  String line = in.readLine();
-		  while (line != null) {
-			  
+		  while (line != null) {  
 			  // Parse line of the form <key> <tab> <value>
 			  String[] keyVal = line.split("\\t", 2);
+			  keysRead++;
 			  if (keyVal.length < 2) return;
 			  String key = keyVal[0];
 			  String val = keyVal[1];
 			  
 			  // Map line
 			  this.j.map(Integer.toString(this.id), val, out);
+			  keysWritten = this.out.getKeysWritten();
+			  
 			  System.out.println("Thread " + this.id + " mapping");
 			  
 			  // Get next line
@@ -292,10 +306,10 @@ public class WorkerServlet extends HttpServlet {
 	  
 	  Job j;
 	  InputReader in;
-	  Context out;
+	  ReduceContext out;
 	  int id;
 	  
-	  private ReduceRun(Job j, InputReader in, Context out, int id) throws FileNotFoundException{ 
+	  private ReduceRun(Job j, InputReader in, ReduceContext out, int id) throws FileNotFoundException{ 
 		  this.j = j; 
 		  this.in = in;
 		  this.out = out;
@@ -304,34 +318,43 @@ public class WorkerServlet extends HttpServlet {
 
 	  @Override
 	  public void run() {
+		  // Get first line
 		  String line = in.readLine();
+		  if (line == null) return;
+		  ArrayList<String> vals = new ArrayList<String>();
+		  String lastKey = "";
 		  while (line != null) {
-			  // Read all lines with the same key from spool-in
-			  ArrayList<String> vals = new ArrayList<String>();
-			  String lastKey = "";
-			  while (line != null) {
-				  // Parse line of the form <key> <tab> <value>
-				  String[] keyVal = line.split("\\t", 2);
-				  if (keyVal.length < 2) {
-					  line = in.readLine();
-					  continue;
-				  }
-				  String key = keyVal[0];
-				  String val = keyVal[1];
+			  // Parse line of the form <key> <tab> <value>
+			  String[] keyVal = line.split("\\t", 2);
+			  keysRead++;
+			  if (keyVal.length < 2) {
+				  line = in.readLine();
+				  continue;
+			  }
+			  String key = keyVal[0];
+			  String val = keyVal[1];
+			  if (!lastKey.isEmpty() && !lastKey.equals(key)) { // new key found
+				  // Reduce values
+				  this.j.reduce(lastKey, vals.toArray(new String[vals.size()]), out);
+				  keysWritten = this.out.getKeysWritten();
 				  
-				  if (!lastKey.equals(key)) { // new key found
-					  // Reduce values
-					  this.j.reduce(key, vals.toArray(new String[vals.size()]), out);
-					  System.out.println("Thread " + this.id + " reducing for key " + key);
-					  lastKey = key;
-					  vals.clear();
-				  } else {
-					  line = in.readLine();
+				  System.out.println("Thread " + this.id + " reducing for key " + lastKey);
+				  lastKey = key;
+				  vals.clear();
+			  } else {
+				  if (lastKey.isEmpty()) lastKey = key;
+				  // No need to get a new line, if last line was new key
+				  vals.add(val);
+				  line = in.readLine();
+				  if (line == null) {
+					  this.j.reduce(lastKey, vals.toArray(new String[vals.size()]), out);
+					  keysWritten = this.out.getKeysWritten();
+					  
+					  System.out.println("Thread " + this.id + " reducing for key " + lastKey);
 				  }
-				  // No need to get a new line, because the last line read 
-				  // was for a new key already
 			  }
 		  }
+		  
 		  System.out.println("Reduce thread " + this.id + " terminating");
 	  }
   }

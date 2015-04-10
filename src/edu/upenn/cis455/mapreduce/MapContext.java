@@ -10,13 +10,15 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 
-public class mapContext implements Context {
+public class MapContext implements Context {
 
-	ArrayList<String> workers;
-	HashMap<String, PrintWriter> workerFiles = new HashMap<String, PrintWriter>(); 
+	private ArrayList<String> workers;
+	private HashMap<String, PrintWriter> workerFiles = new HashMap<String, PrintWriter>(); 
+	private int keysWritten = 0;
 	
-	public mapContext(File outDir, ArrayList<String> workers) throws IOException {
+	public MapContext(File outDir, ArrayList<String> workers) throws IOException {
 		this.workers = workers;
+		this.keysWritten = 0;
 		
 		// Create output file and writer for each worker in spool-out 
 		for (String workerName : workers) {
@@ -32,6 +34,7 @@ public class mapContext implements Context {
 		// Create line
 		if (key.isEmpty() || value.isEmpty()) return;
 		String line = key + "\t" + value;
+		this.keysWritten ++;
 		
 		// Determine the hash of the key for mapping
 		String worker = assignWorker(key);
@@ -69,6 +72,8 @@ public class mapContext implements Context {
 		  
 		return this.workers.get(i);
 	}
+	
+	public int getKeysWritten() { return this.keysWritten; }
 	
 	public void close() {
 		// TODO

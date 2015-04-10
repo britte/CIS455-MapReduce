@@ -72,7 +72,7 @@ public class HttpClient {
 		    out.write(req.getEncodedParams());
 		    
 		    // Send body file (if one exists)
-		    if (req.getBodyFile().exists()) {
+		    if (req.getBodyFile() != null && req.getBodyFile().exists()) {
 		    	BufferedReader reader = new BufferedReader(new FileReader(req.getBodyFile()));
 		    	String line = reader.readLine();
 		    	while (line != null) {

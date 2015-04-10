@@ -1,6 +1,7 @@
 package edu.upenn.cis455.mapreduce.master;
 
 import java.util.HashSet;
+import java.util.Iterator;
 
 public class JobStatus {
 	
@@ -32,11 +33,17 @@ public class JobStatus {
 	public String getOutputDir() { return this.outDir; }
 	public int getMapThreads() { return this.mapThreads; }
 	public int getReduceThreads() { return this.reduceThreads; }
+	public String getJobClass() { return this.jobClass; }
 	
 	public void updateWorkerStatus(WorkerStatus status) {
-		if (status.getJob() != this.jobClass) return; // don't update status for another job
-		if (!status.getStatus().equals("idle")) this.jobStarted = true;
-		workers.remove(status); // remove status if it exists
+//		if (!status.getJob().equals(this.jobClass)) return; // don't update status for another job
+		Iterator<WorkerStatus> iter = workers.iterator();
+		while (iter.hasNext()) {
+			WorkerStatus w = iter.next();
+			if (w.equals(status)) {
+				iter.remove();
+			}
+		}
 		workers.add(status); // add new or updated status
 	}
 	

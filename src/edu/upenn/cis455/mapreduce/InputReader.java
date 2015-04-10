@@ -11,7 +11,6 @@ import java.util.ArrayList;
 public class InputReader {
 	
 	private ArrayList<BufferedReader> readers = new ArrayList<BufferedReader>(); 
-	private boolean canSort = true;
 	
 	public InputReader(File inputDir, boolean sort) throws IOException {
 		File[] files = inputDir.listFiles();
@@ -29,8 +28,7 @@ public class InputReader {
 		}
 	}
 	
-	public synchronized String readLine() {
-		this.canSort = false; // can't sort after reading
+	public String readLine() {
 		try {
 			String line = null;
 			while (line == null) {
@@ -44,10 +42,12 @@ public class InputReader {
 				  
 				// Wait until the reader is available then read in a line
 				line = reader.readLine();
-				if (line == null) { // Buffer finished
-					reader.close();
-					this.readers.remove(0);
-					continue;
+				synchronized(reader) {
+					if (line == null) { // Buffer finished
+						reader.close();
+						this.readers.remove(0);
+						continue;
+					}
 				}
 			}
 			return line;
